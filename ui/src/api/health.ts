@@ -12,6 +12,15 @@ export type DevServerHealthStatus = {
   lastRestartAt: string | null;
 };
 
+export type UpdateStatus = {
+  available: boolean;
+  currentSha: string;
+  upstreamSha: string;
+  behind: number;
+  ahead: number;
+  checkedAt: string;
+};
+
 export type HealthStatus = {
   status: "ok";
   version?: string;
@@ -24,6 +33,7 @@ export type HealthStatus = {
     companyDeletionEnabled?: boolean;
   };
   devServer?: DevServerHealthStatus;
+  updateStatus?: UpdateStatus;
 };
 
 export const healthApi = {
