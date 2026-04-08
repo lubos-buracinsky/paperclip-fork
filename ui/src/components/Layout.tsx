@@ -18,6 +18,7 @@ import { MobileBottomNav } from "./MobileBottomNav";
 import { WorktreeBanner } from "./WorktreeBanner";
 import { DevRestartBanner } from "./DevRestartBanner";
 import { SidebarAccountMenu } from "./SidebarAccountMenu";
+import { UpdateBanner } from "./UpdateBanner";
 import { useDialog } from "../context/DialogContext";
 import { GeneralSettingsProvider } from "../context/GeneralSettingsContext";
 import { usePanel } from "../context/PanelContext";
@@ -318,6 +319,7 @@ export function Layout() {
       </a>
       <WorktreeBanner />
       <DevRestartBanner devServer={health?.devServer} />
+      <UpdateBanner updateStatus={health?.updateStatus} />
       <div className={cn("min-h-0 flex-1", isMobile ? "w-full" : "flex overflow-hidden")}>
         {isMobile && sidebarOpen && (
           <button

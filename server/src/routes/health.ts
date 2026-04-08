@@ -1,4 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
 import { Router } from "express";
 import type { Db } from "@paperclipai/db";
 import { and, count, eq, gt, inArray, isNull, sql } from "drizzle-orm";
@@ -8,6 +10,37 @@ import { readPersistedDevServerStatus, toDevServerHealthStatus } from "../dev-se
 import { logger } from "../middleware/logger.js";
 import { instanceSettingsService } from "../services/instance-settings.js";
 import { serverVersion } from "../version.js";
+import { resolvePaperclipInstanceRoot } from "../home-paths.js";
+
+export type UpdateStatus = {
+  available: boolean;
+  currentSha: string;
+  upstreamSha: string;
+  behind: number;
+  ahead: number;
+  checkedAt: string;
+};
+
+function readUpdateStatus(): UpdateStatus | null {
+  try {
+    const filePath = path.resolve(resolvePaperclipInstanceRoot(), "update-status.json");
+    const raw = fs.readFileSync(filePath, "utf-8");
+    const data = JSON.parse(raw);
+    if (typeof data.behind === "number" && typeof data.currentSha === "string") {
+      return {
+        available: data.behind > 0,
+        currentSha: data.currentSha,
+        upstreamSha: data.upstreamSha,
+        behind: data.behind,
+        ahead: data.ahead ?? 0,
+        checkedAt: data.checkedAt ?? "",
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 function shouldExposeFullHealthDetails(
   actorType: "none" | "board" | "agent" | null | undefined,
@@ -130,6 +163,8 @@ export function healthRoutes(
       return;
     }
 
+    const updateStatus = readUpdateStatus();
+
     res.json({
       status: "ok",
       version: serverVersion,
@@ -142,6 +177,7 @@ export function healthRoutes(
         companyDeletionEnabled: opts.companyDeletionEnabled,
       },
       ...(devServer ? { devServer } : {}),
+      ...(updateStatus ? { updateStatus } : {}),
     });
   });
 
