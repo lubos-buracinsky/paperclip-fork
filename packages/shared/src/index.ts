@@ -283,6 +283,7 @@ export type {
   CostByProviderModel,
   CostByBiller,
   CostByAgentModel,
+  CostByAgentDaily,
   CostWindowSpendRow,
   CostByProject,
   FinanceEvent,
