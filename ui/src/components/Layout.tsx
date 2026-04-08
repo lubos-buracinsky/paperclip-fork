@@ -323,6 +323,21 @@ export function Layout() {
                     <TooltipContent>v{health.version}</TooltipContent>
                   </Tooltip>
                 )}
+                {health?.forkVersion && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="px-1.5 py-0.5 text-[10px] font-mono rounded bg-violet-500/15 text-violet-600 dark:text-violet-400 shrink-0 cursor-default">
+                        {health.forkVersion.commitHash.slice(0, 7)}
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <div className="text-xs">
+                        <div>Fork: {health.forkVersion.commitHash.slice(0, 12)}</div>
+                        <div>{new Date(health.forkVersion.commitDate).toLocaleDateString()}</div>
+                      </div>
+                    </TooltipContent>
+                  </Tooltip>
+                )}
                 <Button variant="ghost" size="icon-sm" className="text-muted-foreground shrink-0" asChild>
                   <Link
                     to={instanceSettingsTarget}
@@ -379,6 +394,21 @@ export function Layout() {
                       <span className="px-2 text-xs text-muted-foreground shrink-0 cursor-default">v</span>
                     </TooltipTrigger>
                     <TooltipContent>v{health.version}</TooltipContent>
+                  </Tooltip>
+                )}
+                {health?.forkVersion && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="px-1.5 py-0.5 text-[10px] font-mono rounded bg-violet-500/15 text-violet-600 dark:text-violet-400 shrink-0 cursor-default">
+                        {health.forkVersion.commitHash.slice(0, 7)}
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent>
+                      <div className="text-xs">
+                        <div>Fork: {health.forkVersion.commitHash.slice(0, 12)}</div>
+                        <div>{new Date(health.forkVersion.commitDate).toLocaleDateString()}</div>
+                      </div>
+                    </TooltipContent>
                   </Tooltip>
                 )}
                 <Button variant="ghost" size="icon-sm" className="text-muted-foreground shrink-0" asChild>

@@ -9,6 +9,8 @@ import { readPersistedDevServerStatus, toDevServerHealthStatus } from "../dev-se
 import { instanceSettingsService } from "../services/instance-settings.js";
 import { serverVersion } from "../version.js";
 import { resolvePaperclipInstanceRoot } from "../home-paths.js";
+import { readForkVersion } from "../fork-version.js";
+import type { ForkVersion } from "../fork-version.js";
 
 export type UpdateStatus = {
   available: boolean;
@@ -17,6 +19,8 @@ export type UpdateStatus = {
   behind: number;
   ahead: number;
   checkedAt: string;
+  forkBehind?: number;
+  forkSha?: string;
 };
 
 function readUpdateStatus(): UpdateStatus | null {
@@ -119,6 +123,7 @@ export function healthRoutes(
     }
 
     const updateStatus = readUpdateStatus();
+    const forkVersion = readForkVersion();
 
     res.json({
       status: "ok",
@@ -133,6 +138,7 @@ export function healthRoutes(
       },
       ...(devServer ? { devServer } : {}),
       ...(updateStatus ? { updateStatus } : {}),
+      ...(forkVersion ? { forkVersion } : {}),
     });
   });
 

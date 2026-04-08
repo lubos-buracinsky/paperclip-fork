@@ -19,6 +19,14 @@ export type UpdateStatus = {
   behind: number;
   ahead: number;
   checkedAt: string;
+  forkBehind?: number;
+  forkSha?: string;
+};
+
+export type ForkVersion = {
+  commitHash: string;
+  commitDate: string;
+  branch: string;
 };
 
 export type HealthStatus = {
@@ -34,6 +42,7 @@ export type HealthStatus = {
   };
   devServer?: DevServerHealthStatus;
   updateStatus?: UpdateStatus;
+  forkVersion?: ForkVersion;
 };
 
 export const healthApi = {
