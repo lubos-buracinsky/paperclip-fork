@@ -156,7 +156,7 @@ export function registerIssueCommands(program: Command): void {
       .command("create")
       .description("Create an issue")
       .requiredOption("-C, --company-id <id>", "Company ID")
-      .requiredOption("--title <title>", "Issue title")
+      .option("--title <title>", "Issue title (auto-generated from description if omitted)")
       .option("--description <text>", "Issue description")
       .option("--status <status>", "Issue status")
       .option("--priority <priority>", "Issue priority")

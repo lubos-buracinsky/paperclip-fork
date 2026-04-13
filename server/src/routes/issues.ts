@@ -61,6 +61,11 @@ import {
   normalizeIssueExecutionPolicy,
   parseIssueExecutionState,
 } from "../services/issue-execution-policy.js";
+function fallbackTitle(description?: string | null): string {
+  if (!description?.trim()) return "Untitled";
+  const firstLine = description.trim().split("\n").find(l => l.trim() && !l.startsWith("#"))?.trim() || description.trim();
+  return firstLine.length > 80 ? firstLine.slice(0, 77) + "..." : firstLine;
+}
 
 const MAX_ISSUE_COMMENT_LIMIT = 500;
 const updateIssueRouteSchema = updateIssueSchema.extend({
@@ -1266,8 +1271,12 @@ export function issueRoutes(
 
     const actor = getActorInfo(req);
     const executionPolicy = normalizeIssueExecutionPolicy(req.body.executionPolicy);
+
+    const title = req.body.title?.trim() || fallbackTitle(req.body.description);
+
     const issue = await svc.create(companyId, {
       ...req.body,
+      title,
       executionPolicy,
       createdByAgentId: actor.agentId,
       createdByUserId: actor.actorType === "user" ? actor.actorId : null,

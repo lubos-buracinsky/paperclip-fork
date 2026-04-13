@@ -697,7 +697,8 @@ export function NewIssueDialog() {
   }
 
   function handleSubmit() {
-    if (!effectiveCompanyId || !title.trim() || createIssue.isPending) return;
+    if (!effectiveCompanyId || createIssue.isPending) return;
+    if (!title.trim() && !description.trim()) return;
     const assigneeAdapterOverrides = buildAssigneeAdapterOverrides({
       adapterType: assigneeAdapterType,
       modelOverride: assigneeModelOverride,
@@ -726,7 +727,7 @@ export function NewIssueDialog() {
     createIssue.mutate({
       companyId: effectiveCompanyId,
       stagedFiles,
-      title: title.trim(),
+      ...(title.trim() ? { title: title.trim() } : {}),
       description: description.trim() || undefined,
       status,
       priority: priority || "medium",
@@ -1061,7 +1062,7 @@ export function NewIssueDialog() {
           <div className="px-4 pt-4 pb-2">
             <textarea
             className="w-full text-lg font-semibold bg-transparent outline-none resize-none overflow-hidden placeholder:text-muted-foreground/50"
-            placeholder="Issue title"
+            placeholder="Issue title (optional)"
             rows={1}
             value={title}
             onChange={(e) => {
