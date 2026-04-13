@@ -1,7 +1,7 @@
 import { SocketModeClient } from "@slack/socket-mode";
 import { WebClient } from "@slack/web-api";
 import { execSync } from "node:child_process";
-import { WORKSPACES, PAPERCLIP_CLI, PAPERCLIP_API_URL, POLL_INTERVAL_MS } from "./config.mjs";
+import { WORKSPACES, PAPERCLIP_CLI, POLL_INTERVAL_MS } from "./config.mjs";
 
 // --- Shared caches (channel/user names are global across workspaces) ---
 
@@ -95,18 +95,6 @@ function getNewAgentComments(companyId) {
   } catch { return []; }
 }
 
-async function fetchLatestAgentComment(issueId) {
-  try {
-    const res = await fetch(`${PAPERCLIP_API_URL}/issues/${issueId}/comments?order=desc&limit=1`);
-    if (!res.ok) return null;
-    const comments = await res.json();
-    if (Array.isArray(comments) && comments.length > 0 && comments[0].agentId) {
-      return comments[0].body || null;
-    }
-    return null;
-  } catch { return null; }
-}
-
 // --- Per-workspace polling ---
 
 async function pollCompletedIssues(ws) {
@@ -130,12 +118,10 @@ async function pollCompletedIssues(ws) {
             const pending = ws.pendingCheckmarks.get(issueId);
             if (pending) {
               try {
-                const fullBody = await fetchLatestAgentComment(c.issueId);
-                const text = fullBody || c.snippet;
                 await ws.slack.chat.postMessage({
                   channel: pending.channel,
                   thread_ts: ts,
-                  text,
+                  text: c.snippet,
                 });
                 console.log(`  [${ws.name}] -> slack thread ${c.identifier}`);
               } catch (e) {
@@ -178,8 +164,7 @@ async function pollCompletedIssues(ws) {
           const agentComment = comments.find(c => c.issueId === issue.id);
           if (agentComment) {
             const notifyUser = routing.notifyUserId ? `<@${routing.notifyUserId}> ` : "";
-            const fullBody = await fetchLatestAgentComment(issue.id);
-            const commentText = fullBody || agentComment.snippet;
+            const commentText = agentComment.snippet;
             try {
               await ws.slack.chat.postMessage({
                 channel,

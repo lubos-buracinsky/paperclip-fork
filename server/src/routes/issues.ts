@@ -1665,7 +1665,7 @@ export function issueRoutes(
         entityId: issue.id,
         details: {
           commentId: comment.id,
-          bodySnippet: comment.body.slice(0, 120),
+          bodySnippet: comment.body.slice(0, 4000),
           identifier: issue.identifier,
           issueTitle: issue.title,
           ...(reopened ? { reopened: true, reopenedFrom: reopenFromStatus, source: "comment" } : {}),
@@ -2262,7 +2262,7 @@ export function issueRoutes(
       entityId: currentIssue.id,
       details: {
         commentId: comment.id,
-        bodySnippet: comment.body.slice(0, 120),
+        bodySnippet: comment.body.slice(0, 4000),
         identifier: currentIssue.identifier,
         issueTitle: currentIssue.title,
         ...(reopened ? { reopened: true, reopenedFrom: reopenFromStatus, source: "comment" } : {}),
