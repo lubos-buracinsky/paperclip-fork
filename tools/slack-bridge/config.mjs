@@ -1,4 +1,5 @@
 export const PAPERCLIP_CLI = "/opt/homebrew/bin/paperclipai";
+export const PAPERCLIP_API_URL = "http://127.0.0.1:3100/api";
 export const POLL_INTERVAL_MS = 60_000;
 
 export const WORKSPACES = [
