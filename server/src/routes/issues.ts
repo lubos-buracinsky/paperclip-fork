@@ -63,8 +63,11 @@ import {
 } from "../services/issue-execution-policy.js";
 function fallbackTitle(description?: string | null): string {
   if (!description?.trim()) return "Untitled";
-  const firstLine = description.trim().split("\n").find(l => l.trim() && !l.startsWith("#"))?.trim() || description.trim();
-  return firstLine.length > 80 ? firstLine.slice(0, 77) + "..." : firstLine;
+  const line = description.trim().split("\n").find(l => {
+    const t = l.trim();
+    return t && !t.startsWith("#") && !t.startsWith("**") && !t.startsWith("![");
+  })?.trim() || description.trim().split("\n").find(l => l.trim())?.trim() || "Untitled";
+  return line.length > 80 ? line.slice(0, 77) + "..." : line;
 }
 
 const MAX_ISSUE_COMMENT_LIMIT = 500;
