@@ -131,7 +131,7 @@ export function costRoutes(db: Db) {
   router.get("/companies/:companyId/costs/by-agent-daily", async (req, res) => {
     const companyId = req.params.companyId as string;
     assertCompanyAccess(req, companyId);
-    const range = parseDateRange(req.query);
+    const range = parseCostDateRange(req.query);
     const rows = await costs.byAgentDaily(companyId, range);
     res.json(rows);
   });
