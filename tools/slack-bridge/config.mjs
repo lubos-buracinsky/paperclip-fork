@@ -10,10 +10,14 @@ export const WORKSPACES = [
     triage: {
       companyId: "a9d33dc4-ba89-4162-8550-178a7d639a7b",
       projectId: "8200d832-3101-4548-bb73-a3acc878bdaa",
-      assigneeAgentId: "9a5b9dc6-068c-4702-b3ff-d97fb162c290",
+      assigneeAgentId: "90795809-5964-4e33-bb71-0b866d832caf",
       notifyUserId: "U017DCMA1SS",
       webUrlBase: "http://100.81.141.101:3100/KOM/issues/",
     },
+    // Channels where issue creation requires explicit :robot_face: reaction trigger.
+    // For other channels, every new message creates an issue automatically.
+    reactionTriggerChannels: ["C094A6LJMSM"], // #ntf-bistro-provoz
+    triggerEmoji: "robot_face",
     watchChannels: [],
   },
   {

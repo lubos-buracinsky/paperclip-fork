@@ -242,6 +242,102 @@ async function pollCompletedIssues(ws) {
   }
 }
 
+
+// --- Per-workspace reaction handler ---
+
+function createReactionHandler(ws) {
+  const processedReactions = new Set();
+
+  return async ({ event, ack }) => {
+    await ack();
+    const triggerEmoji = ws.config.triggerEmoji || "robot_face";
+    if (event.reaction !== triggerEmoji) return;
+    if (event.item?.type !== "message") return;
+
+    const channel = event.item.channel;
+    const ts = event.item.ts;
+    const reactionKey = `${channel}:${ts}:${triggerEmoji}`;
+    if (processedReactions.has(reactionKey)) return;
+    processedReactions.add(reactionKey);
+
+    const routing = resolveRouting(ws.config, channel);
+    if (!routing) return;
+
+    // Try to fetch as root channel message
+    let msg = null;
+    try {
+      const history = await ws.slack.conversations.history({
+        channel,
+        latest: ts,
+        oldest: ts,
+        inclusive: true,
+        limit: 1,
+      });
+      msg = history.messages?.[0];
+    } catch {}
+
+    // If this is a thread reply, add comment to the corresponding issue
+    if (msg && msg.thread_ts && msg.thread_ts !== ts) {
+      const parentTs = msg.thread_ts;
+      const issueId = ws.threadToIssue.get(parentTs);
+      if (issueId) {
+        const userName = await getUserName(ws.slack, msg.user);
+        const text = msg.text || "(no text)";
+        const imagesMd = await transferImages(ws.botToken, msg, routing.companyId);
+        console.log(`  [${ws.name}] :${triggerEmoji}: on thread reply -> comment on issue`);
+        addComment(issueId, `**${userName} (Slack):** ${text}${imagesMd ? "\n" + imagesMd : ""}`);
+        try { await ws.slack.reactions.add({ channel, name: "eyes", timestamp: ts }); } catch {}
+      }
+      return;
+    }
+
+    // If not found via history, try to find it as a thread reply of an existing issue
+    if (!msg) {
+      for (const [parentTs, issueId] of ws.threadToIssue) {
+        try {
+          const replies = await ws.slack.conversations.replies({ channel, ts: parentTs });
+          const found = replies.messages?.find(m => m.ts === ts);
+          if (found) {
+            const userName = await getUserName(ws.slack, found.user);
+            const text = found.text || "(no text)";
+            const imagesMd = await transferImages(ws.botToken, found, routing.companyId);
+            console.log(`  [${ws.name}] :${triggerEmoji}: on thread reply -> comment on issue`);
+            addComment(issueId, `**${userName} (Slack):** ${text}${imagesMd ? "\n" + imagesMd : ""}`);
+            try { await ws.slack.reactions.add({ channel, name: "eyes", timestamp: ts }); } catch {}
+            return;
+          }
+        } catch {}
+      }
+      return;
+    }
+
+    // Root message: create new issue
+    const userName = await getUserName(ws.slack, msg.user);
+    const text = msg.text || "(no text)";
+    const imagesMd = await transferImages(ws.botToken, msg, routing.companyId);
+    const channelName = await getChannelName(ws.slack, channel);
+
+    console.log(`[${ws.name}/${channelName}] :${triggerEmoji}: -> ${userName}: ${text.substring(0, 100)}`);
+
+    const description = [
+      "## Ze Slacku", "",
+      `**Kanal:** #${channelName}`,
+      `**Od:** ${userName}`,
+      `**Cas:** ${new Date(parseFloat(ts) * 1000).toISOString()}`,
+      `**Trigger:** :${triggerEmoji}: reakce`,
+      "", "## Zprava", "", text, ...(imagesMd ? ["", "## Obrazky", "", imagesMd] : []),
+    ].join("\n");
+
+    const issue = createIssue(description, routing);
+    if (issue) {
+      console.log(`  [${ws.name}] -> ${issue.identifier}`);
+      try { await ws.slack.reactions.add({ channel, name: "eyes", timestamp: ts }); } catch {}
+      ws.pendingCheckmarks.set(issue.id, { channel, ts, identifier: issue.identifier, routing });
+      ws.threadToIssue.set(ts, issue.id);
+    }
+  };
+}
+
 // --- Per-workspace message handler ---
 
 function createMessageHandler(ws) {
@@ -265,17 +361,26 @@ function createMessageHandler(ws) {
     const userName = await getUserName(ws.slack, event.user);
     const text = event.text || "(no text)";
 
+    // Channels that require explicit :robot_face: reaction to create issue/comment
+    const reactionOnly = (ws.config.reactionTriggerChannels || []).includes(event.channel);
+
     const imagesMd = await transferImages(ws.botToken, event, routing.companyId);
 
-    // Thread reply -> add comment to existing issue
+    // Thread reply -> add comment to existing issue (skip for reaction-only channels)
     if (event.thread_ts && ws.threadToIssue.has(event.thread_ts)) {
+      if (reactionOnly) return; // wait for :robot_face: reaction
       const issueId = ws.threadToIssue.get(event.thread_ts);
       console.log(`  [${ws.name}] thread reply -> comment on issue`);
       addComment(issueId, `**${userName} (Slack):** ${text}${imagesMd ? "\n" + imagesMd : ""}`);
       return;
     }
 
-    // New message -> create issue
+    // New message -> create issue (skip for reaction-only channels)
+    if (reactionOnly) {
+      console.log(`  [${ws.name}] reaction-only channel, waiting for :${ws.config.triggerEmoji || "robot_face"}: trigger`);
+      return;
+    }
+
     const channelName = await getChannelName(ws.slack, event.channel);
     console.log(`[${ws.name}/${channelName}] ${userName}: ${text.substring(0, 100)}`);
 
@@ -327,6 +432,7 @@ for (const wsConfig of WORKSPACES) {
   };
 
   socket.on("message", createMessageHandler(ws));
+  socket.on("reaction_added", createReactionHandler(ws));
   socket.on("connected", () => {
     console.log(`[${ws.name}] Connected (${wsConfig.routing} routing)`);
   });
