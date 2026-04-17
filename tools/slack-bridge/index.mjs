@@ -130,27 +130,89 @@ function addComment(issueId, text) {
   }
 }
 
-function getNewAgentComments(companyId) {
+function getLatestAgentCommentForIssue(companyId, issueId) {
   try {
     const result = execSync(
       `${PAPERCLIP_CLI} activity list -C ${companyId} --json`,
       { encoding: "utf-8", timeout: 30000 }
     );
     const activities = JSON.parse(result);
-    const comments = [];
+    let best = null;
+    let bestTime = -1;
     for (const a of activities) {
-      if (a.action === "issue.comment_added" && a.agentId && a.details) {
-        comments.push({
+      if (a.action !== "issue.comment_added") continue;
+      if (a.entityId !== issueId) continue;
+      if (!a.agentId || !a.details?.bodySnippet) continue;
+      const t = new Date(a.createdAt || a.timestamp || a.updatedAt || 0).getTime() || 0;
+      if (t >= bestTime) {
+        bestTime = t;
+        best = {
           id: a.id,
           issueId: a.entityId,
           identifier: a.details.identifier,
           snippet: a.details.bodySnippet || "",
           agentId: a.agentId,
-        });
+        };
       }
     }
-    return comments;
-  } catch { return []; }
+    return best;
+  } catch { return null; }
+}
+
+// --- Slack Block Kit formatting ---
+
+function mdToSlackMrkdwn(text) {
+  return text
+    .replace(/\*\*([^*\n]+)\*\*/g, "*$1*")
+    .replace(/__([^_\n]+)__/g, "*$1*")
+    .replace(/^(\s*)-\s+/gm, "$1• ");
+}
+
+function chunkText(text, limit) {
+  if (text.length <= limit) return [text];
+  const out = [];
+  for (let i = 0; i < text.length; i += limit) out.push(text.slice(i, i + limit));
+  return out;
+}
+
+function messageToBlocks(text) {
+  const blocks = [];
+  const lines = (text || "").split("\n");
+  let buffer = [];
+
+  const flushBuffer = () => {
+    if (buffer.length === 0) return;
+    const content = buffer.join("\n").trim();
+    if (content) {
+      for (const chunk of chunkText(mdToSlackMrkdwn(content), 2900)) {
+        blocks.push({ type: "section", text: { type: "mrkdwn", text: chunk } });
+      }
+    }
+    buffer = [];
+  };
+
+  for (const line of lines) {
+    const headerMatch = line.match(/^#{1,6}\s+(.+?)\s*$/);
+    if (headerMatch) {
+      flushBuffer();
+      blocks.push({
+        type: "header",
+        text: { type: "plain_text", text: headerMatch[1].slice(0, 150), emoji: true },
+      });
+    } else {
+      buffer.push(line);
+    }
+  }
+  flushBuffer();
+  return blocks;
+}
+
+function buildStatusBlocks({ statusEmoji, statusLabel, identifier, webUrl, mention, body }) {
+  const contextText = `${mention ? mention + " " : ""}:${statusEmoji}: <${webUrl}|*${identifier}*> — ${statusLabel}`;
+  return [
+    { type: "context", elements: [{ type: "mrkdwn", text: contextText }] },
+    ...messageToBlocks(body),
+  ];
 }
 
 // --- Per-workspace polling ---
@@ -158,43 +220,11 @@ function getNewAgentComments(companyId) {
 async function pollCompletedIssues(ws) {
   if (ws.pendingCheckmarks.size === 0 && ws.threadToIssue.size === 0) return;
 
-  // Collect unique company IDs from this workspace's pending issues
   const companyIds = new Set();
   for (const { routing } of ws.pendingCheckmarks.values()) {
     companyIds.add(routing.companyId);
   }
 
-  // Post new agent comments to Slack threads FIRST (before cleaning up done issues)
-  for (const companyId of companyIds) {
-    try {
-      const comments = getNewAgentComments(companyId);
-      for (const c of comments) {
-        if (ws.postedAgentComments.has(c.id)) continue;
-
-        for (const [ts, issueId] of ws.threadToIssue) {
-          if (issueId === c.issueId && c.snippet) {
-            const pending = ws.pendingCheckmarks.get(issueId);
-            if (pending) {
-              try {
-                await ws.slack.chat.postMessage({
-                  channel: pending.channel,
-                  thread_ts: ts,
-                  text: c.snippet,
-                });
-                console.log(`  [${ws.name}] -> slack thread ${c.identifier}`);
-              } catch (e) {
-                console.error("Failed to post to thread:", e.message);
-              }
-            }
-            ws.postedAgentComments.add(c.id);
-            break;
-          }
-        }
-      }
-    } catch {}
-  }
-
-  // Then check for done/blocked status and clean up maps
   for (const companyId of companyIds) {
     try {
       const result = execSync(
@@ -206,11 +236,36 @@ async function pollCompletedIssues(ws) {
       for (const issue of issues) {
         if (!ws.pendingCheckmarks.has(issue.id)) continue;
         const { channel, ts, identifier, routing } = ws.pendingCheckmarks.get(issue.id);
+        const webUrl = `${routing.webUrlBase}${identifier}`;
 
         if (issue.status === "done") {
           console.log(`  [${ws.name}] done ${identifier}`);
           try { await ws.slack.reactions.remove({ channel, name: "eyes", timestamp: ts }); } catch {}
           try { await ws.slack.reactions.add({ channel, name: "white_check_mark", timestamp: ts }); } catch {}
+
+          const last = getLatestAgentCommentForIssue(routing.companyId, issue.id);
+          if (last?.snippet) {
+            const blocks = buildStatusBlocks({
+              statusEmoji: "white_check_mark",
+              statusLabel: "hotovo",
+              identifier,
+              webUrl,
+              body: last.snippet,
+            });
+            try {
+              await ws.slack.chat.postMessage({
+                channel,
+                thread_ts: ts,
+                text: `${identifier} — hotovo`,
+                blocks,
+                unfurl_links: false,
+                unfurl_media: false,
+              });
+            } catch (e) {
+              console.error("Failed to post done summary:", e.message);
+            }
+          }
+
           ws.pendingCheckmarks.delete(issue.id);
           ws.threadToIssue.delete(ts);
 
@@ -218,19 +273,28 @@ async function pollCompletedIssues(ws) {
           console.log(`  [${ws.name}] blocked ${identifier}`);
           try { await ws.slack.reactions.add({ channel, name: "warning", timestamp: ts }); } catch {}
 
-          const comments = getNewAgentComments(routing.companyId);
-          const agentComment = comments.find(c => c.issueId === issue.id);
-          if (agentComment) {
-            const notifyUser = routing.notifyUserId ? `<@${routing.notifyUserId}> ` : "";
-            const commentText = agentComment.snippet;
+          const last = getLatestAgentCommentForIssue(routing.companyId, issue.id);
+          if (last?.snippet) {
+            const mention = routing.notifyUserId ? `<@${routing.notifyUserId}>` : "";
+            const blocks = buildStatusBlocks({
+              statusEmoji: "warning",
+              statusLabel: "blokovaný",
+              identifier,
+              webUrl,
+              mention,
+              body: last.snippet,
+            });
             try {
               await ws.slack.chat.postMessage({
                 channel,
                 thread_ts: ts,
-                text: `${notifyUser}:warning: *${identifier}* je blokovaný:\n${commentText}\n\n${routing.webUrlBase}${identifier}`,
+                text: `${identifier} — blokovaný`,
+                blocks,
+                unfurl_links: false,
+                unfurl_media: false,
               });
             } catch (e) {
-              console.error("Failed to reply:", e.message);
+              console.error("Failed to post blocked summary:", e.message);
             }
           }
           ws.notifiedBlocked.add(issue.id);
@@ -428,7 +492,6 @@ for (const wsConfig of WORKSPACES) {
     pendingCheckmarks: new Map(),
     threadToIssue: new Map(),
     notifiedBlocked: new Set(),
-    postedAgentComments: new Set(),
   };
 
   socket.on("message", createMessageHandler(ws));
