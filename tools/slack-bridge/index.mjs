@@ -516,8 +516,11 @@ async function backfillChannel(ws, channel) {
   const fallback = (Date.now() / 1000) - BACKFILL_FALLBACK_HOURS * 3600;
   const oldest = lastSeen ? parseFloat(lastSeen) : fallback;
 
+  console.log(`[${ws.name}] backfill scan ${channel} oldest=${oldest} lastSeen=${lastSeen || "none"}`);
+
   let cursor = undefined;
   let batches = 0;
+  let totalFetched = 0;
   const collected = [];
   do {
     let res;
@@ -532,9 +535,13 @@ async function backfillChannel(ws, channel) {
       console.error(`[${ws.name}] backfill history failed for ${channel}:`, e.message);
       return;
     }
-    if (!res.ok) return;
-    for (const msg of res.messages || []) {
-      // Slack returns messages newest-first; collect and reverse
+    if (!res.ok) {
+      console.error(`[${ws.name}] backfill history !ok for ${channel}:`, res.error);
+      return;
+    }
+    const msgs = res.messages || [];
+    totalFetched += msgs.length;
+    for (const msg of msgs) {
       if (parseFloat(msg.ts) > parseFloat(lastSeen || "0")) collected.push(msg);
     }
     cursor = res.response_metadata?.next_cursor || undefined;
@@ -542,21 +549,26 @@ async function backfillChannel(ws, channel) {
   } while (cursor && batches < 5);
 
   collected.sort((a, b) => parseFloat(a.ts) - parseFloat(b.ts));
+  console.log(`[${ws.name}] backfill ${channel}: fetched=${totalFetched} eligible=${collected.length}`);
   if (collected.length === 0) return;
 
-  console.log(`[${ws.name}] backfill ${channel}: ${collected.length} missed message(s) since ${lastSeen || "fallback"}`);
   for (const msg of collected) {
     await processMessageEvent(ws, { ...msg, channel }, { source: "backfill" });
   }
 }
 
 async function backfillWorkspace(ws) {
-  if (ws.config.routing !== "direct") return; // triage uses reaction trigger; out of scope for v1
+  if (ws.config.routing !== "direct") {
+    console.log(`[${ws.name}] backfill skipped (routing=${ws.config.routing})`);
+    return;
+  }
   const channelIds = Object.keys(ws.config.channels || {});
+  console.log(`[${ws.name}] backfill starting for ${channelIds.length} channel(s)`);
   for (const channel of channelIds) {
     try { await backfillChannel(ws, channel); }
     catch (e) { console.error(`[${ws.name}] backfill error in ${channel}:`, e.message); }
   }
+  console.log(`[${ws.name}] backfill done`);
 }
 
 // --- Startup ---
