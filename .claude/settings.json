@@ -1,0 +1,8 @@
+{
+  "enabledPlugins": {
+    "figma@claude-plugins-official": false,
+    "vercel@claude-plugins-official": false,
+    "plugin-dev@claude-plugins-official": false,
+    "mcp-server-dev@claude-plugins-official": false
+  }
+}
