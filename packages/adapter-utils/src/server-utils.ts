@@ -1151,6 +1151,14 @@ export async function runChildProcess(
 
         const stdin = child.stdin;
         if (opts.stdin != null && stdin) {
+          // EPIPE can fire if the child closes stdin before our write completes.
+          // Without this listener the emitted 'error' event crashes the server.
+          stdin.on("error", (err: NodeJS.ErrnoException) => {
+            if (err.code === "EPIPE") return;
+            void opts
+              .onLog("stderr", `stdin error: ${err.message}`)
+              .catch((logErr) => onLogError(logErr, runId, "failed to log stdin error"));
+          });
           void spawnPersistPromise.finally(() => {
             if (child.killed || stdin.destroyed) return;
             stdin.write(opts.stdin as string);
