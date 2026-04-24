@@ -455,7 +455,10 @@ async function processMessageEvent(ws, event, { source = "live" } = {}) {
   const routing = resolveRouting(ws.config, event.channel);
   if (!routing) return;
 
-  updateLastSeen(ws.name, event.channel, event.ts);
+  // lastSeen is updated only AFTER successful processing. If createIssue/addComment
+  // fails (e.g., paperclip API down), lastSeen stays at old value so the next
+  // reconnect's backfill re-scans and re-tries this message. On persistent failure
+  // the backfill keeps retrying on each reconnect until the API is back.
 
   const userName = await getUserName(ws.slack, event.user);
   const text = event.text || "(no text)";
@@ -465,10 +468,15 @@ async function processMessageEvent(ws, event, { source = "live" } = {}) {
   const imagesMd = await transferImages(ws.botToken, event, routing.companyId);
 
   if (event.thread_ts && ws.threadToIssue.has(event.thread_ts)) {
-    if (reactionOnly) return;
+    if (reactionOnly) {
+      updateLastSeen(ws.name, event.channel, event.ts);
+      return;
+    }
     const issueId = ws.threadToIssue.get(event.thread_ts);
     console.log(`  [${ws.name}] thread reply -> comment on issue${source === "backfill" ? " (backfill)" : ""}`);
-    addComment(issueId, `**${userName} (Slack):** ${text}${imagesMd ? "\n" + imagesMd : ""}`);
+    const ok = addComment(issueId, `**${userName} (Slack):** ${text}${imagesMd ? "\n" + imagesMd : ""}`);
+    if (ok) updateLastSeen(ws.name, event.channel, event.ts);
+    else console.error(`  [${ws.name}] comment dropped — will retry on reconnect (lastSeen unchanged)`);
     return;
   }
 
@@ -476,6 +484,7 @@ async function processMessageEvent(ws, event, { source = "live" } = {}) {
     if (source === "live") {
       console.log(`  [${ws.name}] reaction-only channel, waiting for :${ws.config.triggerEmoji || "robot_face"}: trigger`);
     }
+    updateLastSeen(ws.name, event.channel, event.ts);
     return;
   }
 
@@ -493,13 +502,16 @@ async function processMessageEvent(ws, event, { source = "live" } = {}) {
   ].join("\n");
 
   const issue = createIssue(description, routing);
-  if (issue && imagesMd) console.log(`  [${ws.name}] uploaded ${getImageFiles(event).length} image(s)`);
-  if (issue) {
-    console.log(`  [${ws.name}] -> ${issue.identifier}`);
-    try { await ws.slack.reactions.add({ channel: event.channel, name: "eyes", timestamp: event.ts }); } catch {}
-    ws.pendingCheckmarks.set(issue.id, { channel: event.channel, ts: event.ts, identifier: issue.identifier, routing });
-    ws.threadToIssue.set(event.ts, issue.id);
+  if (!issue) {
+    console.error(`  [${ws.name}] issue create dropped — will retry on reconnect (lastSeen unchanged)`);
+    return;
   }
+  if (imagesMd) console.log(`  [${ws.name}] uploaded ${getImageFiles(event).length} image(s)`);
+  console.log(`  [${ws.name}] -> ${issue.identifier}`);
+  try { await ws.slack.reactions.add({ channel: event.channel, name: "eyes", timestamp: event.ts }); } catch {}
+  ws.pendingCheckmarks.set(issue.id, { channel: event.channel, ts: event.ts, identifier: issue.identifier, routing });
+  ws.threadToIssue.set(event.ts, issue.id);
+  updateLastSeen(ws.name, event.channel, event.ts);
 }
 
 function createMessageHandler(ws) {
@@ -513,6 +525,17 @@ function createMessageHandler(ws) {
 
 async function backfillChannel(ws, channel) {
   const lastSeen = getLastSeen(ws.name, channel);
+  const isTriage = ws.config.routing === "triage";
+
+  // First-time triage: do NOT bulk-import history (could create 24h of stale issues
+  // across every channel the bot joined). Initialize lastSeen to now so subsequent
+  // reconnects catch only the gap.
+  if (!lastSeen && isTriage) {
+    updateLastSeen(ws.name, channel, String(Date.now() / 1000));
+    console.log(`[${ws.name}] backfill: triage init ${channel} to now (no history import)`);
+    return;
+  }
+
   const fallback = (Date.now() / 1000) - BACKFILL_FALLBACK_HOURS * 3600;
   const oldest = lastSeen ? parseFloat(lastSeen) : fallback;
 
@@ -557,13 +580,44 @@ async function backfillChannel(ws, channel) {
   }
 }
 
+async function listTriageChannels(ws) {
+  const out = [];
+  let cursor;
+  do {
+    let res;
+    try {
+      res = await ws.slack.users.conversations({
+        types: "public_channel,private_channel",
+        exclude_archived: true,
+        limit: 200,
+        cursor,
+      });
+    } catch (e) {
+      console.error(`[${ws.name}] listTriageChannels failed:`, e.message);
+      return out;
+    }
+    if (!res.ok) {
+      console.error(`[${ws.name}] listTriageChannels !ok:`, res.error);
+      return out;
+    }
+    for (const c of res.channels || []) out.push(c.id);
+    cursor = res.response_metadata?.next_cursor || undefined;
+  } while (cursor);
+  return out;
+}
+
 async function backfillWorkspace(ws) {
-  if (ws.config.routing !== "direct") {
-    console.log(`[${ws.name}] backfill skipped (routing=${ws.config.routing})`);
+  let channelIds;
+  if (ws.config.routing === "direct") {
+    channelIds = Object.keys(ws.config.channels || {});
+  } else if (ws.config.routing === "triage") {
+    channelIds = await listTriageChannels(ws);
+  } else {
+    console.log(`[${ws.name}] backfill skipped (unknown routing=${ws.config.routing})`);
     return;
   }
-  const channelIds = Object.keys(ws.config.channels || {});
-  console.log(`[${ws.name}] backfill starting for ${channelIds.length} channel(s)`);
+
+  console.log(`[${ws.name}] backfill starting for ${channelIds.length} channel(s) (${ws.config.routing} routing)`);
   for (const channel of channelIds) {
     try { await backfillChannel(ws, channel); }
     catch (e) { console.error(`[${ws.name}] backfill error in ${channel}:`, e.message); }
