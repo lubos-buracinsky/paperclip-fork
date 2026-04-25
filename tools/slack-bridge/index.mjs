@@ -138,10 +138,21 @@ function resolveRouting(wsConfig, channelId) {
 
 // --- Paperclip CLI ---
 
-function createIssue(description, routing) {
+function deriveTitle(text) {
+  const firstLine = (text || "")
+    .split("\n")
+    .map(l => l.trim())
+    .find(l => l && !l.startsWith("#") && !l.startsWith("**") && !l.startsWith("!["));
+  const candidate = firstLine || "Zprava ze Slacku";
+  return candidate.length > 80 ? candidate.slice(0, 77) + "..." : candidate;
+}
+
+function createIssue(description, routing, titleSource) {
+  const title = deriveTitle(titleSource ?? description);
   try {
     const result = execSync(
       `${PAPERCLIP_CLI} issue create -C ${routing.companyId} ` +
+      `--title "${title.replace(/"/g, '\\"')}" ` +
       `--description "${description.replace(/"/g, '\\"')}" ` +
       `--assignee-agent-id ${routing.assigneeAgentId} ` +
       `--project-id ${routing.projectId} --priority medium --status todo --json`,
@@ -188,11 +199,34 @@ function getLatestAgentCommentForIssue(companyId, issueId) {
           issueId: a.entityId,
           identifier: a.details.identifier,
           snippet: a.details.bodySnippet || "",
+          commentId: a.details.commentId || null,
           agentId: a.agentId,
         };
       }
     }
     return best;
+  } catch { return null; }
+}
+
+// Server's bodySnippet may be 120-char truncated on older deploys → fetch full
+// body via authenticated API. Returns null on any failure (caller falls back
+// to snippet).
+async function fetchAgentCommentBody(issueId, commentId) {
+  try {
+    const token = getPaperclipBoardToken();
+    if (!token) return null;
+    const res = await fetch(`${PAPERCLIP_API}/api/issues/${issueId}/comments?limit=50`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) return null;
+    const comments = await res.json();
+    if (!Array.isArray(comments)) return null;
+    const target = commentId
+      ? comments.find(c => c.id === commentId)
+      : [...comments]
+          .filter(c => c.authorAgentId)
+          .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
+    return target?.body || null;
   } catch { return null; }
 }
 
@@ -282,12 +316,13 @@ async function pollCompletedIssues(ws) {
 
           const last = getLatestAgentCommentForIssue(routing.companyId, issue.id);
           if (last?.snippet) {
+            const fullBody = await fetchAgentCommentBody(issue.id, last.commentId);
             const blocks = buildStatusBlocks({
               statusEmoji: "white_check_mark",
               statusLabel: "hotovo",
               identifier,
               webUrl,
-              body: last.snippet,
+              body: fullBody || last.snippet,
             });
             try {
               await ws.slack.chat.postMessage({
@@ -312,6 +347,7 @@ async function pollCompletedIssues(ws) {
 
           const last = getLatestAgentCommentForIssue(routing.companyId, issue.id);
           if (last?.snippet) {
+            const fullBody = await fetchAgentCommentBody(issue.id, last.commentId);
             const mention = routing.notifyUserId ? `<@${routing.notifyUserId}>` : "";
             const blocks = buildStatusBlocks({
               statusEmoji: "warning",
@@ -319,7 +355,7 @@ async function pollCompletedIssues(ws) {
               identifier,
               webUrl,
               mention,
-              body: last.snippet,
+              body: fullBody || last.snippet,
             });
             try {
               await ws.slack.chat.postMessage({
@@ -429,7 +465,7 @@ function createReactionHandler(ws) {
       "", "## Zprava", "", text, ...(imagesMd ? ["", "## Obrazky", "", imagesMd] : []),
     ].join("\n");
 
-    const issue = createIssue(description, routing);
+    const issue = createIssue(description, routing, text);
     if (issue) {
       console.log(`  [${ws.name}] -> ${issue.identifier}`);
       try { await ws.slack.reactions.add({ channel, name: "eyes", timestamp: ts }); } catch {}
@@ -501,7 +537,7 @@ async function processMessageEvent(ws, event, { source = "live" } = {}) {
     "", "## Zprava", "", text, ...(imagesMd ? ["", "## Obrazky", "", imagesMd] : []),
   ].join("\n");
 
-  const issue = createIssue(description, routing);
+  const issue = createIssue(description, routing, text);
   if (!issue) {
     console.error(`  [${ws.name}] issue create dropped — will retry on reconnect (lastSeen unchanged)`);
     return;
