@@ -43,6 +43,31 @@ function updateLastSeen(wsName, channel, ts) {
   }
 }
 
+// Per-workspace runtime state (pendingCheckmarks/threadToIssue/notifiedBlocked)
+// MUST survive restarts: the bridge daemon respawns on websocket errors, and
+// without persistence the in-memory Maps reset → status notifications and thread
+// replies for issues created before the restart silently stop working.
+
+function wsStateKey(wsName) { return `_ws:${wsName}`; }
+
+function loadWorkspaceState(wsName) {
+  const raw = state[wsStateKey(wsName)] || {};
+  return {
+    pendingCheckmarks: new Map(raw.pendingCheckmarks || []),
+    notifiedBlocked: new Set(raw.notifiedBlocked || []),
+    threadToIssue: new Map(raw.threadToIssue || []),
+  };
+}
+
+function persistWs(ws) {
+  state[wsStateKey(ws.name)] = {
+    pendingCheckmarks: [...ws.pendingCheckmarks],
+    notifiedBlocked: [...ws.notifiedBlocked],
+    threadToIssue: [...ws.threadToIssue],
+  };
+  saveState(state);
+}
+
 // --- Shared caches (channel/user names are global across workspaces) ---
 
 const channelNames = new Map();
@@ -340,6 +365,7 @@ async function pollCompletedIssues(ws) {
 
           ws.pendingCheckmarks.delete(issue.id);
           ws.threadToIssue.delete(ts);
+          persistWs(ws);
 
         } else if (issue.status === "blocked" && !ws.notifiedBlocked.has(issue.id)) {
           console.log(`  [${ws.name}] blocked ${identifier}`);
@@ -371,6 +397,7 @@ async function pollCompletedIssues(ws) {
             }
           }
           ws.notifiedBlocked.add(issue.id);
+          persistWs(ws);
         }
       }
     } catch (e) {
@@ -471,6 +498,7 @@ function createReactionHandler(ws) {
       try { await ws.slack.reactions.add({ channel, name: "eyes", timestamp: ts }); } catch {}
       ws.pendingCheckmarks.set(issue.id, { channel, ts, identifier: issue.identifier, routing });
       ws.threadToIssue.set(ts, issue.id);
+      persistWs(ws);
     }
   };
 }
@@ -547,6 +575,7 @@ async function processMessageEvent(ws, event, { source = "live" } = {}) {
   try { await ws.slack.reactions.add({ channel: event.channel, name: "eyes", timestamp: event.ts }); } catch {}
   ws.pendingCheckmarks.set(issue.id, { channel: event.channel, ts: event.ts, identifier: issue.identifier, routing });
   ws.threadToIssue.set(event.ts, issue.id);
+  persistWs(ws);
   updateLastSeen(ws.name, event.channel, event.ts);
 }
 
@@ -677,18 +706,22 @@ for (const wsConfig of WORKSPACES) {
   const slack = new WebClient(botToken);
   const socket = new SocketModeClient({ appToken });
 
+  const restored = loadWorkspaceState(wsConfig.name);
   const ws = {
     name: wsConfig.name,
     config: wsConfig,
     slack,
     socket,
     botToken,
-    pendingCheckmarks: new Map(),
-    threadToIssue: new Map(),
-    notifiedBlocked: new Set(),
+    pendingCheckmarks: restored.pendingCheckmarks,
+    threadToIssue: restored.threadToIssue,
+    notifiedBlocked: restored.notifiedBlocked,
     processed: new Set(),
     backfillRunning: false,
   };
+  if (restored.pendingCheckmarks.size || restored.notifiedBlocked.size) {
+    console.log(`[${wsConfig.name}] restored state: pending=${restored.pendingCheckmarks.size} blocked=${restored.notifiedBlocked.size} threads=${restored.threadToIssue.size}`);
+  }
 
   socket.on("message", createMessageHandler(ws));
   socket.on("reaction_added", createReactionHandler(ws));
