@@ -61,6 +61,12 @@ bash setup-autostart.sh  # nastaví macOS launchd autostart
 - Obrázky ze Slacku se přidávají do issue popisu
 - Polling hotových/blocked issues každých 60s
 
+**Spolehlivost (restart-safe):**
+- Stav (`pendingCheckmarks`, `threadToIssue`, `notifiedBlocked`, per-channel `lastSeen`) se persistuje do `~/.slack-bridge-state.json` po každé změně. Crash + launchd respawn nedropne notifikace ani thread mappingy.
+- Po reconnectu websocketu se z Slack history backfillují zprávy mladší než `lastSeen` → žádná zpráva nepropadne, i když daemon padl.
+- Title issue se odvozuje z textu zprávy (první ne-markdown řádek, max 80 znaků, fallback `"Zprava ze Slacku"`).
+- Done/blokovaný notifikace berou plné tělo posledního agentova komentu přes autentikované `GET /api/issues/:id/comments` (board token z `~/.paperclip/auth.json`). Workaround pro 120-char `bodySnippet` truncation v upstream serveru — lze odstranit po deploy forku, který má snippet 4000 znaků a optional title (commits `cb7eabd5`, `53592243`).
+
 **Autostart:** macOS launchd service `com.komfi.slack-bridge`, plist v `~/Library/LaunchAgents/`
 
 ### MCP servery pro agenty
